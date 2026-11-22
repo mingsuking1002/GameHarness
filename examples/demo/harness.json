@@ -1,0 +1,56 @@
+{
+  "requiredFiles": [
+    "HANDOFF.md",
+    "history.md",
+    "demo.py"
+  ],
+  "tools": [],
+  "reports": "reports",
+  "wikiHistory": "history.md",
+  "checks": {
+    "repro-before": {
+      "command": [
+        "{python}",
+        "demo.py",
+        "repro-before"
+      ]
+    },
+    "movement": {
+      "command": [
+        "{python}",
+        "demo.py",
+        "movement"
+      ]
+    },
+    "replay": {
+      "command": [
+        "{python}",
+        "demo.py",
+        "replay"
+      ]
+    },
+    "wiki": {
+      "command": [
+        "{python}",
+        "demo.py",
+        "wiki",
+        "{out}/wiki.html"
+      ]
+    }
+  },
+  "features": {
+    "movement": {
+      "checks": [
+        "movement"
+      ]
+    },
+    "replay": {
+      "checks": [
+        "replay"
+      ],
+      "dependsOn": [
+        "movement"
+      ]
+    }
+  }
+}

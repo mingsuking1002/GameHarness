@@ -1,4 +1,4 @@
-"""Run from a game's root: python ../GameHarness/run.py doctor|status|check NAME."""
+"""Run project checks, inspect feature impact, and record work from the game's root."""
 import argparse
 from datetime import datetime, timezone
 import hashlib
@@ -24,15 +24,19 @@ def record_work(root, profile, args):
     if not history.is_relative_to(root):
         raise ValueError("wikiHistory must be inside the project")
     fields = [args.title, args.summary, args.evidence, args.next]
+    if args.repro is not None:
+        fields.append(args.repro)
     if any(not value or len(value.splitlines()) != 1 for value in fields):
         raise ValueError("Each record field must be a non-empty single line")
     heading, separator, previous = history.read_text(encoding="utf-8-sig").partition("\n")
     if not separator or not heading.startswith("# "):
         raise ValueError("wikiHistory must start with a Markdown heading")
     day = datetime.now().astimezone().date().isoformat()
+    reproduction = f"- 재현 조건과 기대 결과 — {args.repro}\n" if args.repro else ""
     entry = (
         f"## {day} · {args.title}\n\n"
         f"- 변경 내용과 이유 — {args.summary}\n"
+        f"{reproduction}"
         f"- 검증과 증거 — {args.evidence}\n"
         f"- 남은 작업 — {args.next}\n"
     )
@@ -47,44 +51,26 @@ def record_work(root, profile, args):
     return 0
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["status", "doctor", "check", "record"])
-    parser.add_argument("name", nargs="?")
-    parser.add_argument("--project", type=Path, default=Path.cwd())
-    for field in ("title", "summary", "evidence", "next"):
-        parser.add_argument("--" + field)
-    args = parser.parse_args()
-    root = args.project.resolve()
-    profile = json.loads((root / "harness.json").read_text(encoding="utf-8-sig"))
-    if args.action == "record":
-        if args.name or not all((args.title, args.summary, args.evidence, args.next)):
-            parser.error("record requires --title, --summary, --evidence and --next")
-        if "wikiHistory" not in profile:
-            parser.error("Set wikiHistory in harness.json to enable work records")
-        return record_work(root, profile, args)
-    if args.action == "status":
-        print((root / "HANDOFF.md").read_text(encoding="utf-8-sig"))
-        return 0
-    if args.action == "doctor":
-        missing = [item for item in profile["requiredFiles"] if not (root / item).is_file()]
-        missing += [exe for exe in profile["tools"] if not shutil.which(exe)]
-        print("Missing: " + ", ".join(missing) if missing else "Environment OK")
-        print("Checks:", ", ".join(profile["checks"]))
-        return int(bool(missing))
-    if args.name not in profile["checks"]:
-        parser.error("Select one of: " + ", ".join(profile["checks"]))
-    spec = profile["checks"][args.name]
+def run_check(root, profile, name):
+    spec = profile["checks"][name]
     now = datetime.now(timezone.utc)
-    out = root / profile["reports"] / (now.strftime("%Y%m%dT%H%M%SZ") + "-" + args.name + "-" + uuid.uuid4().hex[:8])
+    out = root / profile["reports"] / (now.strftime("%Y%m%dT%H%M%SZ") + "-" + name + "-" + uuid.uuid4().hex[:8])
     out.mkdir(parents=True)
     command = [arg.replace("{out}", str(out)) for arg in spec["command"]]
+    if command[0] == "{python}":
+        command[0] = sys.executable
     if "/" in command[0] or "\\" in command[0]:
         command[0] = str((root / command[0]).resolve())
-    report = dict(check=args.name, started=now.isoformat(), command=command, status="not_run")
+    report = dict(check=name, started=now.isoformat(), command=command, status="not_run")
     try:
         report["inputsSha256"] = {p: digest(root / p) for p in spec.get("identify", [])}
         with (out / "run.log").open("wb") as log:
+            if spec.get("requiresCurrentBuild"):
+                guard = subprocess.run([sys.executable, "-X", "utf8", profile["buildGuard"]], cwd=root,
+                                       stdout=log, stderr=subprocess.STDOUT, timeout=60)
+                if guard.returncode != 0:
+                    raise ValueError("Build identity check failed; see run.log")
+                report["buildIdentitySha256"] = digest(root / profile["buildIdentity"])
             result = subprocess.run(command, cwd=root, stdout=log, stderr=subprocess.STDOUT,
                                     timeout=spec.get("timeout", 180))
         report["exitCode"] = result.returncode
@@ -104,6 +90,65 @@ def main():
     if "error" in report:
         print(report["error"])
     return int(report["status"] != "passed")
+
+
+def affected_features(features, changed):
+    if changed not in features:
+        raise ValueError("Choose a feature: " + ", ".join(features))
+    for name, feature in features.items():
+        unknown = set(feature.get("dependsOn", [])) - features.keys()
+        if unknown:
+            raise ValueError(f"{name} depends on unknown features: {', '.join(sorted(unknown))}")
+    affected = [changed]
+    for dependency in affected:
+        affected.extend(name for name, feature in features.items()
+                        if name not in affected and dependency in feature.get("dependsOn", []))
+    return affected
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("action", choices=["status", "doctor", "check", "record", "impact", "verify"])
+    parser.add_argument("name", nargs="?")
+    parser.add_argument("--project", type=Path, default=Path.cwd())
+    for field in ("title", "summary", "evidence", "next"):
+        parser.add_argument("--" + field)
+    parser.add_argument("--repro", help="Conditions, observed failure, and expected behavior")
+    args = parser.parse_args()
+    root = args.project.resolve()
+    profile = json.loads((root / "harness.json").read_text(encoding="utf-8-sig"))
+    if args.action == "record":
+        if args.name or not all((args.title, args.summary, args.evidence, args.next)):
+            parser.error("record requires --title, --summary, --evidence and --next")
+        if "wikiHistory" not in profile:
+            parser.error("Set wikiHistory in harness.json to enable work records")
+        return record_work(root, profile, args)
+    if args.action == "status":
+        print((root / "HANDOFF.md").read_text(encoding="utf-8-sig"))
+        return 0
+    if args.action == "doctor":
+        missing = [item for item in profile["requiredFiles"] if not (root / item).is_file()]
+        missing += [exe for exe in profile["tools"] if not shutil.which(exe)]
+        print("Missing: " + ", ".join(missing) if missing else "Environment OK")
+        print("Checks:", ", ".join(profile["checks"]))
+        return int(bool(missing))
+    if args.action == "check":
+        if args.name not in profile["checks"]:
+            parser.error("Select one of: " + ", ".join(profile["checks"]))
+        return run_check(root, profile, args.name)
+
+    features = profile.get("features", {})
+    affected = affected_features(features, args.name)
+    checks = list(dict.fromkeys(check for feature in affected for check in features[feature]["checks"]))
+    if not checks or set(checks) - profile["checks"].keys():
+        raise ValueError("Affected features must reference registered checks")
+    for name in affected:
+        print(f"{name}: {', '.join(features[name]['checks'])}", flush=True)
+    if args.action == "impact":
+        return 0
+    # Run all selected checks in order, even when one reports a regression.
+    results = [run_check(root, profile, name) for name in checks]
+    return int(any(results))
 
 
 if __name__ == "__main__":

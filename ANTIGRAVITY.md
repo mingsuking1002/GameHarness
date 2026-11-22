@@ -1,12 +1,14 @@
-# Antigravity에 전달할 메시지
+# 프로젝트 교대 절차
 
-아수라판 Unity 프로젝트를 이어받아 줘. 작업 폴더는 C:\Users\ksh00\project\ModooMarbleUnity야. 먼저 AGENTS.md와 HANDOFF.md에서 담당, 완료 조건, 마지막 검사와 다음 행동을 확인해. 현재는 하네스 설치가 끝나서 교대 가능한 상태야.
+게임 폴더를 작업 루트로 열고 AGENTS.md와 HANDOFF.md에서 담당, 완료 조건, 최근 검사와 다음 행동을 확인한다.
 
-프로젝트 루트에서 다음 두 명령으로 인수인계와 환경을 확인해.
+프로젝트 루트에서 인수인계와 실행 환경을 확인한다.
 
 ~~~powershell
 python ../GameHarness/run.py status
 python ../GameHarness/run.py doctor
 ~~~
 
-새 작업을 받으면 어떤 동작을 보면 완료인지 먼저 기록해. 소스 변경은 check source, 화면은 check front, 주사위는 check dice, 경기·로비 복귀는 check loop로 검증해. 실행 검사는 변경분이 들어간 빌드를 대상으로 해. 기능 하나가 끝나거나 교대하기 전에 변경 파일, 검사 결과 폴더, 미실행 항목, 다음 행동을 HANDOFF.md에 남겨 줘. 다른 사람이 작성 중인 같은 파일은 리뷰만 진행해.
+버그는 수정 전 시드, 입력, 실제 결과, 기대 결과를 고정해서 재현한다. `impact 기능명`으로 영향 범위를 확인하고 호출부와 저장·온라인 상태를 대조한다. 새 관계는 harness.json의 features에 추가한다. 수정 뒤 `verify 기능명`으로 관련 기능을 검사한다. 실행 검사는 변경 사항이 포함된 빌드를 사용한다.
+
+교대할 때 HANDOFF.md에 변경 파일, 결과 경로, 미확인 항목과 다음 행동을 기록한다. `record --repro`로 재현 조건과 증거를 이력에 추가하고 `check wiki`로 반영한다.
